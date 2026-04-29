@@ -3,55 +3,57 @@ import re
 
 class MapiProParser:
     """
-    Hardware-Aware Static Profiler for MSP430FR6989.
-    Filters out comments/headers and maps code to Mapi-Pro energy constants.
+    Hardware-Aware Static Profiler for MSP430FR6989 (FRAM-based).
+    Maps C code to physical energy/cycle costs for MAPI-PRO simulation.
     """
 
     def __init__(self):
-        # Energy Constants (nJ) - Mapi-Pro Specs
-        self.ENERGY_SRAM_READ = 5500.0
-        self.ENERGY_SRAM_WRITE = 5600.0
-        self.ENERGY_FRAM_READ = 10325.0
-        self.ENERGY_FRAM_WRITE = 13125.0
-        self.ENERGY_LOGIC_OP = 2100.0
+        # Energy Constants (nJ) - MSP430FR6989 Specs
+        # FRAM is more expensive than SRAM but persistent
+        self.ENERGY_SRAM_READ = 5200.0
+        self.ENERGY_SRAM_WRITE = 5400.0
+        self.ENERGY_FRAM_READ = 10500.0
+        self.ENERGY_FRAM_WRITE = 13500.0
+        self.ENERGY_LOGIC_OP = 2500.0
 
         # Latency (Clock Cycles @ 16MHz)
         self.LATENCY_SRAM = 1
-        self.LATENCY_FRAM = 2
+        self.LATENCY_FRAM = 3  # FRAM usually has a wait-state at 16MHz
         self.LATENCY_LOGIC = 1
+
+        self.predicted_algo = "Unknown"
+        self.signatures = {
+            "CRC-16": ["crc", "icrc", "poly", "bit", "cword"],
+            "QuickSort": ["partition", "pivot", "quicksort", "swap", "low", "high"],
+            "Dijkstra": ["dist", "vertex", "adj", "weight", "priority", "graph", "minnd"]
+        }
 
     def profile_line(self, line, mapping_config="HYBRID"):
         """
-        Analyzes a single line of C code and calculates hardware costs.
+        Calculates the physical 'cost' of executing one line of C code.
         """
         line = line.strip()
 
-        # Guard: If line is empty or just punctuation, it costs 0
+        # Costs 0 if it's just structural syntax
         if not line or line in ["{", "}", "(", ")", ";"]:
             return 0.0, 0
 
         energy = 0.0
         cycles = 0
 
-        # Heuristic Instruction Classification
+        # Identify instruction type
         is_write = "=" in line and "==" not in line and "!=" not in line
-        # Check for variables or buffer access
-        is_read = any(var in line for var in ["data[", "crc", "input", "lin[", "ans"])
-        is_logic = any(op in line for op in ["^", ">>", "<<", "&", "|", "+", "-", "*", "++"])
+        # Check for data-heavy operations
+        is_read = any(keyword in line for keyword in ["data[", "arr[", "input", "lin[", "rgnNodes"])
+        is_logic = any(op in line for op in ["^", ">>", "<<", "&", "|", "+", "-", "*", "++", "--"])
 
-        # Mapi-Pro Memory Mapping
-        if mapping_config == "SRAM_ONLY":
-            mem_read, mem_write, mem_lat = self.ENERGY_SRAM_READ, self.ENERGY_SRAM_WRITE, self.LATENCY_SRAM
-        elif mapping_config == "FRAM_ONLY":
+        # MAPI-PRO Hybrid Memory Mapping Logic
+        # Large arrays and buffers are mapped to FRAM; scalars to SRAM
+        if any(buf in line for buf in ["arr[", "lin[", "AdjMatrix", "rgnNodes"]):
             mem_read, mem_write, mem_lat = self.ENERGY_FRAM_READ, self.ENERGY_FRAM_WRITE, self.LATENCY_FRAM
-        else:  # HYBRID (Mapi-Pro Strategy)
-            # Buffers like 'lin' or 'icrctb' are likely in FRAM
-            if any(buf in line for buf in ["lin[", "icrctb[", "rchr["]):
-                mem_read, mem_write, mem_lat = self.ENERGY_FRAM_READ, self.ENERGY_FRAM_WRITE, self.LATENCY_FRAM
-            else:
-                mem_read, mem_write, mem_lat = self.ENERGY_SRAM_READ, self.ENERGY_SRAM_WRITE, self.LATENCY_SRAM
+        else:
+            mem_read, mem_write, mem_lat = self.ENERGY_SRAM_READ, self.ENERGY_SRAM_WRITE, self.LATENCY_SRAM
 
-        # Aggregate Costs
         if is_write:
             energy += mem_write
             cycles += mem_lat
@@ -62,26 +64,60 @@ class MapiProParser:
             energy += self.ENERGY_LOGIC_OP
             cycles += self.LATENCY_LOGIC
 
+        # Base instruction overhead (fetch/decode)
+        energy += 1000.0
+        cycles += 1
+
         return energy, cycles
+
+    def get_checkpoint_cost(self, state_size_bytes=32):
+        """
+        The cost of saving state to Non-Volatile FRAM.
+        Increasing this value encourages the agent to be more efficient.
+        """
+        # Saving state requires writing to FRAM
+        energy = state_size_bytes * self.ENERGY_FRAM_WRITE
+        cycles = state_size_bytes * self.LATENCY_FRAM
+        return energy, cycles
+
+    def get_cyclomatic_complexity(self, code_block):
+        """
+        Static analysis of branching complexity.
+        Used for telemetry only; ignored by the ML decision engine for max gain.
+        """
+        decision_points = ['if', 'else', 'for', 'while', 'switch', 'case', '&&', '||']
+        score = 1
+        for point in decision_points:
+            if point in code_block:
+                score += 1
+        return score
 
     def load_c_file(self, file_path):
         """
-        Extracts executable C instructions and maps them to their
-        original source file line numbers.
+        Parses C file into clean instructions and identifies the algorithm.
         """
         clean_instructions = []
         in_multiline_comment = False
 
         try:
             with open(file_path, 'r') as f:
-                for line_num, line in enumerate(f, 1):  # Start at 1 for editor parity
-                    stripped = line.strip()
+                content = f.read()
 
+                # Identify Algo
+                content_lower = content.lower()
+                for algo, keywords in self.signatures.items():
+                    if any(key in content_lower for key in keywords):
+                        self.predicted_algo = algo
+                        break
+
+                f.seek(0)
+                for line_num, line in enumerate(f, 1):
+                    stripped = line.strip()
+                    # Filter comments
                     if "/*" in stripped: in_multiline_comment = True
                     if in_multiline_comment:
                         if "*/" in stripped: in_multiline_comment = False
                         continue
-
                     if not stripped or stripped.startswith(("//", "*", "#")):
                         continue
                     if stripped in ["{", "}", "};"]:
@@ -94,14 +130,6 @@ class MapiProParser:
                             "line_no": line_num
                         })
             return clean_instructions
-        except FileNotFoundError:
+        except Exception as e:
+            print(f"Error loading C file: {e}")
             return []
-
-    def get_checkpoint_cost(self, state_size_bytes=32):
-        energy = state_size_bytes * self.ENERGY_FRAM_WRITE
-        cycles = state_size_bytes * self.LATENCY_FRAM
-        return energy, cycles
-
-    def is_block_boundary(self, line):
-        boundaries = ['if', 'else', 'for', 'while', 'return', 'break', 'switch']
-        return any(b in line for b in boundaries)

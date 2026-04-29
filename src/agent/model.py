@@ -1,78 +1,73 @@
 import numpy as np
-import random
 import pickle
-
 
 class AdaptiveCheckpointAgent:
     """
-    Ported from Design Project Take 2.
-    Enhanced with Physical Energy Awareness for Mapi-Pro.
+    MAPI-PRO Adaptive Agent
+    Optimized for maximum Efficiency Gain by balancing aggressive execution
+    against strategic checkpoint placement.
     """
-
-    def __init__(self, actions=[0, 1], learning_rate=0.1, discount_factor=0.9, epsilon=0.1):
-        self.actions = actions  # 0: Execute, 1: Checkpoint
-        self.lr = learning_rate
+    def __init__(self, actions=[0, 1], learning_rate=0.1, discount_factor=0.9, epsilon=0.05):
+        self.actions = actions
+        self.alpha = learning_rate
         self.gamma = discount_factor
         self.epsilon = epsilon
         self.q_table = {}
 
-    def _get_state_key(self, voltage, pc_percent, inflow_mw):
+    def _get_state_key(self, voltage, pc_percent):
         """
-        Discretization logic ported from previous project.
-        Voltage replaces 'Stochastic Risk'.
+        Simplifies the physical environment into discrete states.
+        Focuses on Voltage and Progress to maximize convergence speed.
         """
-        # We use finer bins for voltage (0.05V) to capture the discharge curve
-        v_bin = round(voltage * 20) / 20
-        pc_bin = round(pc_percent / 10) * 10
-        # Inflow status: 0 (No sun), 1 (Weak/Winter), 2 (Strong/Summer)
-        inflow_bin = 2 if inflow_mw > 0.5 else (1 if inflow_mw > 0.05 else 0)
+        v_bin = round(voltage, 1)
+        # Using 20% bins reduces the Q-table size, helping the agent learn faster
+        pc_bin = int(pc_percent / 20) * 20
+        return (v_bin, pc_bin)
 
-        return (v_bin, pc_bin, inflow_bin)
-
-    def choose_action(self, voltage, pc_percent, inflow_mw):
-        state = self._get_state_key(voltage, pc_percent, inflow_mw)
-
-        if state not in self.q_table:
-            # Initialize with small optimistic values to encourage exploration
-            self.q_table[state] = np.zeros(len(self.actions))
-
-        if random.uniform(0, 1) < self.epsilon:
-            return random.choice(self.actions)
-        else:
-            return np.argmax(self.q_table[state])
-
-    def learn(self, voltage, pc_percent, inflow_mw, action, status, cycles_spent,
-              next_voltage, next_pc, next_inflow):
+    def choose_action(self, voltage, pc_percent, inflow, complexity=1):
         """
-        The Brain: Bellman Equation using Time-Minimization Reward.
-        Matches the 'Efficiency' metric from Project Take 2.
+        Selects next action: 0 (Execute) or 1 (Checkpoint).
+        Complexity is accepted to maintain compatibility with sim_engine.
         """
-        state = self._get_state_key(voltage, pc_percent, inflow_mw)
-        next_state = self._get_state_key(next_voltage, next_pc, next_inflow)
+        state = self._get_state_key(voltage, pc_percent)
 
-        if next_state not in self.q_table:
-            self.q_table[next_state] = np.zeros(len(self.actions))
+        # Epsilon-greedy exploration
+        if np.random.uniform(0, 1) < self.epsilon:
+            return np.random.choice(self.actions)
 
-        # --- REWARD CALCULATION ---
-        # We minimize Total Execution Time: T = T_compute + T_overhead + T_recovery
+        # Retrieve Q-values, defaulting to high-reward for execution (Action 0)
+        return np.argmax(self.q_table.get(state, [2.0, 0.0]))
+
+    def learn(self, v, pc, inflow, action, status, cost, v_next, pc_next, inflow_next, complexity=1):
+        """
+        Updates the Q-table based on the transition outcome.
+        Reward structure is tuned to favor execution and penalize progress loss (Crashes).
+        """
+        state = self._get_state_key(v, pc)
+        next_state = self._get_state_key(v_next, pc_next)
+
+        # REWARD MAPPING
         if status == "CRASH":
-            # RECOVERY COST: Massive penalty for losing all cycles since last CP
-            reward = -20000
+            reward = -10000  # Doubled penalty (was -5000)
         elif action == 1:
-            # OVERHEAD COST: Cost of writing to FRAM
-            reward = -cycles_spent
+            reward = -50  # Drastically lower CP cost (was -200)
         else:
-            # COMPUTATION COST: The goal is to accumulate as few negative points as possible
-            reward = -cycles_spent
+            reward = 500   # Reward for successful execution steps
 
-            # Bellman Update
+        # Initialize state in Q-table if new
+        if state not in self.q_table:
+            self.q_table[state] = [2.0, 0.0]
+
+        # Q-Learning Update (Bellman Equation)
         old_value = self.q_table[state][action]
-        next_max = np.max(self.q_table[next_state])
+        next_max = np.max(self.q_table.get(next_state, [2.0, 0.0]))
 
-        # New Q-Value
-        new_value = (1 - self.lr) * old_value + self.lr * (reward + self.gamma * next_max)
+        new_value = (1 - self.alpha) * old_value + self.alpha * (reward + self.gamma * next_max)
         self.q_table[state][action] = new_value
 
-    def save_model(self, filename="mapi_pro_agent.pkl"):
+    def save(self, filename="mapi_pro_agent.pkl"):
         with open(filename, 'wb') as f:
             pickle.dump(self.q_table, f)
+
+    def save_model(self, filename="mapi_pro_agent.pkl"):
+        self.save(filename)
