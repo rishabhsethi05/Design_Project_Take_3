@@ -25,7 +25,21 @@ class MapiProParser:
         self.signatures = {
             "CRC-16": ["crc", "icrc", "poly", "bit", "cword"],
             "QuickSort": ["partition", "pivot", "quicksort", "swap", "low", "high"],
-            "Dijkstra": ["dist", "vertex", "adj", "weight", "priority", "graph", "minnd"]
+            "Dijkstra": ["dist", "vertex", "adj", "weight", "priority", "graph", "minnd"],
+            # --- ADDED SIGNATURE FOR BUBBLESORT ---
+            "BubbleSort": ["bubblesort", "sorted", "temp", "numelems", "index"],
+            # --- ADDED SIGNATURE FOR CUBIC ---
+            "Cubic": ["solvecubic", "cubic", "r2_q3", "theta", "pow", "acos"],
+            # --- ADDED SIGNATURE FOR INSERTSORT ---
+            "InsertSort": ["insertsort", "initialise_benchmark", "verify_benchmark"],
+            # --- ADDED SIGNATURE FOR MERGESORT ---
+            "MergeSort": ["mergesort", "mergesortr", "testcompare", "binarylast", "range_length"],
+            # --- ADDED SIGNATURE FOR PRIME ---
+            "Prime": ["divides", "even", "prime", "swap(&x", "swap(&y"],
+            # --- ADDED SIGNATURE FOR HASH ---
+            "Hash": ["sglib", "hashed", "htab", "ilist", "malloc_beebs", "heap_ptr"],
+            # --- ADDED SIGNATURE FOR STRINGSEARCH ---
+            "StringSearch": ["stringsearch1", "prep1", "exec1", "prep2", "exec2", "buf[", "search["]
         }
 
     def profile_line(self, line, mapping_config="HYBRID"):
@@ -42,14 +56,22 @@ class MapiProParser:
         cycles = 0
 
         # Identify instruction type
-        is_write = "=" in line and "==" not in line and "!=" not in line
-        # Check for data-heavy operations
-        is_read = any(keyword in line for keyword in ["data[", "arr[", "input", "lin[", "rgnNodes"])
-        is_logic = any(op in line for op in ["^", ">>", "<<", "&", "|", "+", "-", "*", "++", "--"])
+        is_write = "=" in line and "==" not in line and "!=" not in line and "<=" not in line and ">=" not in line
+
+        # Check for data-heavy operations (Added string search buffers)
+        is_read = any(keyword in line for keyword in
+                      ["data[", "arr[", "input", "lin[", "rgnNodes", "array[", "x[", "a[", "array1[", "buffer[",
+                       "memcpy", "htab[", "heap[", "malloc_beebs", "buf[", "search[", "strlen"])
+
+        # Expanded logic operations to capture standard library math functions and modulo (%)
+        is_logic = any(op in line for op in
+                       ["^", ">>", "<<", "&", "|", "+", "-", "*", "++", "--", "%", "pow(", "acos(", "sqrt(", "cos(",
+                        "fabs("])
 
         # MAPI-PRO Hybrid Memory Mapping Logic
-        # Large arrays and buffers are mapped to FRAM; scalars to SRAM
-        if any(buf in line for buf in ["arr[", "lin[", "AdjMatrix", "rgnNodes"]):
+        # Large arrays, hash tables, text strings, and custom heaps are mapped to FRAM; scalars to SRAM
+        if any(buf in line for buf in
+               ["arr[", "lin[", "AdjMatrix", "rgnNodes", "array[", "x[", "a[", "array1[", "buffer[", "memcpy", "htab[", "heap[", "buf[", "search["]):
             mem_read, mem_write, mem_lat = self.ENERGY_FRAM_READ, self.ENERGY_FRAM_WRITE, self.LATENCY_FRAM
         else:
             mem_read, mem_write, mem_lat = self.ENERGY_SRAM_READ, self.ENERGY_SRAM_WRITE, self.LATENCY_SRAM

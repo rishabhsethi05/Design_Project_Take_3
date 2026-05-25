@@ -1,32 +1,76 @@
 import pandas as pd
 import matplotlib.pyplot as plt
+import numpy as np
 import os
 
 
-def generate_research_comparison():
-    scenarios = ["summer", "winter", "night"]
-    plt.figure(figsize=(12, 6))
+def smooth_curve(data, window=5):
+    return data.rolling(window=window, min_periods=1).mean()
 
-    base_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+def generate_research_comparison():
+
+    scenarios = ["summer", "winter"]
+
+    plt.figure(figsize=(11, 6))
+
+    base_path = os.path.dirname(
+        os.path.dirname(
+            os.path.dirname(os.path.abspath(__file__))
+        )
+    )
 
     for sc in scenarios:
+
         file_path = os.path.join(base_path, f"output_trace_{sc}.csv")
+
         if os.path.exists(file_path):
+
             df = pd.read_csv(file_path)
-            # Group by epoch to get the best performance per training round
-            epoch_max = df.groupby('Epoch')['Total_Cycles'].max()
-            plt.plot(epoch_max.index, epoch_max.values, label=f'Scenario: {sc.capitalize()}', marker='o')
 
-    plt.title("Mapi-Pro ML Agent: Execution Efficiency Across Scenarios", fontsize=14)
-    plt.xlabel("Training Epochs", fontsize=12)
-    plt.ylabel("Total Clock Cycles (Latency)", fontsize=12)
-    plt.yscale('log')  # Log scale often shows learning curves better
-    plt.legend()
-    plt.grid(True, which="both", ls="-", alpha=0.5)
+            epoch_cycles = df.groupby('Epoch')['Total_Cycles'].max()
 
-    save_path = os.path.join(base_path, "multi_scenario_comparison.png")
-    plt.savefig(save_path)
-    print(f"[*] Comparison plot saved to: {save_path}")
+            smoothed = smooth_curve(epoch_cycles)
+
+            plt.plot(
+                epoch_cycles.index,
+                smoothed,
+                linewidth=2.5,
+                marker='o',
+                markersize=3,
+                label=f'{sc.capitalize()} Scenario'
+            )
+
+    plt.title(
+        "MAPI-PRO Reinforcement Learning Convergence",
+        fontsize=16,
+        fontweight='bold'
+    )
+
+    plt.xlabel(
+        "Training Epoch",
+        fontsize=13
+    )
+
+    plt.ylabel(
+        "Total Execution Cycles",
+        fontsize=13
+    )
+
+    plt.grid(True, linestyle='--', alpha=0.5)
+
+    plt.legend(fontsize=11)
+
+    plt.ticklabel_format(style='sci', axis='y', scilimits=(0, 0))
+
+    plt.tight_layout()
+
+    save_path = os.path.join(base_path, "rl_convergence_plot.png")
+
+    plt.savefig(save_path, dpi=600)
+
+    print(f"Saved: {save_path}")
+
     plt.show()
 
 
