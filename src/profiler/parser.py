@@ -39,7 +39,17 @@ class MapiProParser:
             # --- ADDED SIGNATURE FOR HASH ---
             "Hash": ["sglib", "hashed", "htab", "ilist", "malloc_beebs", "heap_ptr"],
             # --- ADDED SIGNATURE FOR STRINGSEARCH ---
-            "StringSearch": ["stringsearch1", "prep1", "exec1", "prep2", "exec2", "buf[", "search["]
+            "StringSearch": ["stringsearch1", "prep1", "exec1", "prep2", "exec2", "buf[", "search["],
+            # --- ADDED SIGNATURE FOR RECURSION ---
+            "Recursion": ["fib(", "fib(i", "anka(", "kalle("],
+            # --- ADDED SIGNATURE FOR STRSTR ---
+            "StrStr": ["strstr", "phaystack", "pneedle", "rhaystack", "rneedle", "foundneedle"],
+            # --- ADDED SIGNATURE FOR WIKISORT ---
+            "WikiSort": ["wikisort", "wikimerge", "blockswap", "floorpoweroftwo", "testcompare", "array1["],
+            # --- ADDED SIGNATURE FOR HUFFMAN ---
+            "Huffman": ["huffbench", "compdecomp", "heap_adjust", "malloc_beebs", "free_beebs", "heap2["],
+            # --- ADDED SIGNATURE FOR FIBCALL ---
+            "FibCall": ["fibcall", "fnew", "fold", "832040", "apsim_loop"]
         }
 
     def profile_line(self, line, mapping_config="HYBRID"):
@@ -58,20 +68,24 @@ class MapiProParser:
         # Identify instruction type
         is_write = "=" in line and "==" not in line and "!=" not in line and "<=" not in line and ">=" not in line
 
-        # Check for data-heavy operations (Added string search buffers)
+        # Check for data-heavy operations (Added string search, strstr, WikiSort, and Huffman arrays/buffers)
         is_read = any(keyword in line for keyword in
                       ["data[", "arr[", "input", "lin[", "rgnNodes", "array[", "x[", "a[", "array1[", "buffer[",
-                       "memcpy", "htab[", "heap[", "malloc_beebs", "buf[", "search[", "strlen"])
+                       "memcpy", "htab[", "heap[", "malloc_beebs", "buf[", "search[", "strlen", "text", "substr",
+                       "phaystack", "pneedle", "rhaystack", "rneedle", "cache[", "wikimerge",
+                       "freq[", "link[", "code[", "clen[", "heap2[", "outc[", "comp[", "cptr", "dptr"])
 
-        # Expanded logic operations to capture standard library math functions and modulo (%)
+        # Expanded logic operations to capture standard library math functions, modulo (%), and sqrt()
         is_logic = any(op in line for op in
                        ["^", ">>", "<<", "&", "|", "+", "-", "*", "++", "--", "%", "pow(", "acos(", "sqrt(", "cos(",
                         "fabs("])
 
         # MAPI-PRO Hybrid Memory Mapping Logic
-        # Large arrays, hash tables, text strings, and custom heaps are mapped to FRAM; scalars to SRAM
+        # Large arrays, hash tables, text strings, compression tables, and custom heaps are mapped to FRAM; scalars to SRAM
         if any(buf in line for buf in
-               ["arr[", "lin[", "AdjMatrix", "rgnNodes", "array[", "x[", "a[", "array1[", "buffer[", "memcpy", "htab[", "heap[", "buf[", "search["]):
+               ["arr[", "lin[", "AdjMatrix", "rgnNodes", "array[", "x[", "a[", "array1[", "buffer[", "memcpy", "htab[",
+                "heap[", "buf[", "search[", "text", "substr", "phaystack", "pneedle", "rhaystack", "rneedle", "cache[",
+                "freq[", "link[", "code[", "clen[", "heap2[", "outc[", "comp[", "heap_ptr", "heap_end"]):
             mem_read, mem_write, mem_lat = self.ENERGY_FRAM_READ, self.ENERGY_FRAM_WRITE, self.LATENCY_FRAM
         else:
             mem_read, mem_write, mem_lat = self.ENERGY_SRAM_READ, self.ENERGY_SRAM_WRITE, self.LATENCY_SRAM

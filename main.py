@@ -75,7 +75,17 @@ def run_experiment(scenario_name="Winter",
             )
 
             # Priority Routing
-            if "mergesort" in cleaned_content or "merge" in benchmark_file.lower():
+            if "wikisort" in cleaned_content or "wiki" in benchmark_file.lower():
+                sim.parser.predicted_algo = "WikiSort"
+
+            elif "huffman" in cleaned_content or "huff" in benchmark_file.lower():
+                sim.parser.predicted_algo = "Huffman"
+
+            # --- ADDED ROUTING FOR FIBCALL ---
+            elif "fibcall" in cleaned_content or "fib" in benchmark_file.lower():
+                sim.parser.predicted_algo = "FibCall"
+
+            elif "mergesort" in cleaned_content or "merge" in benchmark_file.lower():
                 sim.parser.predicted_algo = "MergeSort"
 
             elif "insertsort" in cleaned_content or "insert" in benchmark_file.lower():
@@ -89,6 +99,12 @@ def run_experiment(scenario_name="Winter",
 
             elif "stringsearch" in cleaned_content or "search" in benchmark_file.lower():
                 sim.parser.predicted_algo = "StringSearch"
+
+            elif "strstr" in cleaned_content or "strstr" in benchmark_file.lower():
+                sim.parser.predicted_algo = "StrStr"
+
+            elif "recursion" in cleaned_content or "recursion" in benchmark_file.lower():
+                sim.parser.predicted_algo = "Recursion"
 
             elif "cubic" in cleaned_content or "cubic" in benchmark_file.lower():
                 sim.parser.predicted_algo = "Cubic"
@@ -347,8 +363,10 @@ if __name__ == "__main__":
     # --------------------------------------------------------
     # CONFIGURATION
     # --------------------------------------------------------
-    SELECTED_BENCHMARK = "hash.c"
+    # --- CHANGED DEFAULT TARGET CONFIGURATION TO FIBCALL ---
+    SELECTED_BENCHMARK = "fibcall.c"
 
+    # Enforces 5x instruction loop unrolling multiplication profile
     WORKLOAD_MULTIPLIER = 5
 
     scenarios = ["Summer", "Winter", "Night"]
