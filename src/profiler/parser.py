@@ -9,7 +9,6 @@ class MapiProParser:
 
     def __init__(self):
         # Energy Constants (nJ) - MSP430FR6989 Specs
-        # FRAM is more expensive than SRAM but persistent
         self.ENERGY_SRAM_READ = 5200.0
         self.ENERGY_SRAM_WRITE = 5400.0
         self.ENERGY_FRAM_READ = 10500.0
@@ -18,37 +17,27 @@ class MapiProParser:
 
         # Latency (Clock Cycles @ 16MHz)
         self.LATENCY_SRAM = 1
-        self.LATENCY_FRAM = 3  # FRAM usually has a wait-state at 16MHz
+        self.LATENCY_FRAM = 3
         self.LATENCY_LOGIC = 1
 
         self.predicted_algo = "Unknown"
+
+        # STRIPPED SIGNATURES: Removed generic C vars (temp, index) and BEEBS global functions
         self.signatures = {
-            "CRC-16": ["crc", "icrc", "poly", "bit", "cword"],
-            "QuickSort": ["partition", "pivot", "quicksort", "swap", "low", "high"],
-            "Dijkstra": ["dist", "vertex", "adj", "weight", "priority", "graph", "minnd"],
-            # --- ADDED SIGNATURE FOR BUBBLESORT ---
-            "BubbleSort": ["bubblesort", "sorted", "temp", "numelems", "index"],
-            # --- ADDED SIGNATURE FOR CUBIC ---
-            "Cubic": ["solvecubic", "cubic", "r2_q3", "theta", "pow", "acos"],
-            # --- ADDED SIGNATURE FOR INSERTSORT ---
-            "InsertSort": ["insertsort", "initialise_benchmark", "verify_benchmark"],
-            # --- ADDED SIGNATURE FOR MERGESORT ---
-            "MergeSort": ["mergesort", "mergesortr", "testcompare", "binarylast", "range_length"],
-            # --- ADDED SIGNATURE FOR PRIME ---
-            "Prime": ["divides", "even", "prime", "swap(&x", "swap(&y"],
-            # --- ADDED SIGNATURE FOR HASH ---
-            "Hash": ["sglib", "hashed", "htab", "ilist", "malloc_beebs", "heap_ptr"],
-            # --- ADDED SIGNATURE FOR STRINGSEARCH ---
-            "StringSearch": ["stringsearch1", "prep1", "exec1", "prep2", "exec2", "buf[", "search["],
-            # --- ADDED SIGNATURE FOR RECURSION ---
-            "Recursion": ["fib(", "fib(i", "anka(", "kalle("],
-            # --- ADDED SIGNATURE FOR STRSTR ---
+            "CRC-16": ["crc", "icrc", "poly", "cword"],
+            "QuickSort": ["quicksort", "partition", "pivot", "istack", "jstack", "nstack"],
+            "Dijkstra": ["dijkstra", "minnd", "rgnnodes"],
+            "BubbleSort": ["bubblesort", "numelems"],
+            "Cubic": ["solvecubic", "r2_q3"],
+            "InsertSort": ["insertsort"],
+            "MergeSort": ["mergesort", "mergesortr", "binarylast", "range_length"],
+            "Prime": ["prime", "divides"],
+            "Hash": ["sglib", "hashed", "htab", "ilist"],
+            "StringSearch": ["stringsearch1", "prep1", "exec1", "prep2", "exec2"],
+            "Recursion": ["anka(", "kalle("],
             "StrStr": ["strstr", "phaystack", "pneedle", "rhaystack", "rneedle", "foundneedle"],
-            # --- ADDED SIGNATURE FOR WIKISORT ---
-            "WikiSort": ["wikisort", "wikimerge", "blockswap", "floorpoweroftwo", "testcompare", "array1["],
-            # --- ADDED SIGNATURE FOR HUFFMAN ---
-            "Huffman": ["huffbench", "compdecomp", "heap_adjust", "malloc_beebs", "free_beebs", "heap2["],
-            # --- ADDED SIGNATURE FOR FIBCALL ---
+            "WikiSort": ["wikisort", "wikimerge", "blockswap", "floorpoweroftwo"],
+            "Huffman": ["huffbench", "compdecomp", "heap_adjust"],
             "FibCall": ["fibcall", "fnew", "fold", "832040", "apsim_loop"]
         }
 
@@ -130,7 +119,7 @@ class MapiProParser:
 
     def load_c_file(self, file_path):
         """
-        Parses C file into clean instructions and identifies the algorithm.
+        Parses C file into clean instructions and identifies the algorithm via frequency scoring.
         """
         clean_instructions = []
         in_multiline_comment = False
@@ -139,13 +128,30 @@ class MapiProParser:
             with open(file_path, 'r') as f:
                 content = f.read()
 
-                # Identify Algo
+                # IDENTIFY ALGO: Frequency Scoring System
                 content_lower = content.lower()
-                for algo, keywords in self.signatures.items():
-                    if any(key in content_lower for key in keywords):
-                        self.predicted_algo = algo
-                        break
+                algo_scores = {algo: 0 for algo in self.signatures.keys()}
 
+                for algo, keywords in self.signatures.items():
+                    for key in keywords:
+                        key_lower = key.lower()
+                        pattern = re.compile(re.escape(key_lower))
+                        for match in pattern.finditer(content_lower):
+                            start, end = match.span()
+                            prev_char = content_lower[start - 1] if start > 0 else ' '
+                            next_char = content_lower[end] if end < len(content_lower) else ' '
+
+                            if not prev_char.isalnum() and prev_char != '_' and not next_char.isalnum() and next_char != '_':
+                                algo_scores[algo] += 1
+
+                # Find the algorithm with the highest match count
+                best_algo = max(algo_scores, key=algo_scores.get)
+                if algo_scores[best_algo] > 0:
+                    self.predicted_algo = best_algo
+                else:
+                    self.predicted_algo = "Unknown"
+
+                # Parse file into instructions
                 f.seek(0)
                 for line_num, line in enumerate(f, 1):
                     stripped = line.strip()
