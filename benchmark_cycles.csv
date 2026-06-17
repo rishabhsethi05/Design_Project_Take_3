@@ -1,0 +1,4 @@
+Benchmark,Hybrid,Proposed
+quicksort,20614945,16000516
+quicksort,19281574,16000234
+quicksort,0,0

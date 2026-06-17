@@ -1,0 +1,4 @@
+Benchmark,Hybrid,Proposed
+quicksort,43.83%,52.76%
+quicksort,63.10%,75.10%
+quicksort,0.00%,0.00% (Insufficient Power)
