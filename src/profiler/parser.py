@@ -5,6 +5,7 @@ class MapiProParser:
     """
     Hardware-Aware Static Profiler for MSP430FR6989 (FRAM-based).
     Maps C code to physical energy/cycle costs for MAPI-PRO simulation.
+    Supports 13+ embedded benchmarks including AES, FFT, SHA256, FIR, MatMult, and BS.
     """
 
     def __init__(self):
@@ -22,7 +23,7 @@ class MapiProParser:
 
         self.predicted_algo = "Unknown"
 
-        # STRIPPED SIGNATURES: Removed generic C vars (temp, index) and BEEBS global functions
+        # Benchmark Identification Signatures
         self.signatures = {
             "CRC-16": ["crc", "icrc", "poly", "cword"],
             "QuickSort": ["quicksort", "partition", "pivot", "istack", "jstack", "nstack"],
@@ -31,15 +32,55 @@ class MapiProParser:
             "Cubic": ["solvecubic", "r2_q3"],
             "InsertSort": ["insertsort"],
             "MergeSort": ["mergesort", "mergesortr", "binarylast", "range_length"],
-            "Prime": ["prime", "divides"],
+            "Prime": ["prime", "divides", "even(", "swap("],
             "Hash": ["sglib", "hashed", "htab", "ilist"],
             "StringSearch": ["stringsearch1", "prep1", "exec1", "prep2", "exec2"],
             "Recursion": ["anka(", "kalle("],
             "StrStr": ["strstr", "phaystack", "pneedle", "rhaystack", "rneedle", "foundneedle"],
             "WikiSort": ["wikisort", "wikimerge", "blockswap", "floorpoweroftwo"],
             "Huffman": ["huffbench", "compdecomp", "heap_adjust"],
-            "FibCall": ["fibcall", "fnew", "fold", "832040", "apsim_loop"]
+            "FibCall": ["fibcall", "fnew", "fold", "832040", "apsim_loop"],
+            "MatMult": ["matmult", "multiply", "arraya", "arrayb", "resultarray", "upperlimit"],
+            "AES": ["cipher", "subbytes", "shiftrows", "mixcolumns", "addroundkey", "keyexpansion"],
+            "FFT": ["fft_compute", "realdata", "imagdata", "sintable", "reverse_bits"],
+            "SHA256": ["sha256_transform", "sha256_init", "sha256_update", "k_sha", "data_buf"],
+            "FIR": ["fir_filter", "fir_coeffs", "fir_input", "fir_output"],
+            "DCT": ["dct_compute", "dct_coeffs", "dct_data", "dct_result"],
+            "BinarySearch": ["binary_search", "data_array", "search_targets"],
+            "Select": ["quick_select", "backup_arr"],
+            "Count": ["count_non_negative", "InitSeed", "Array["],
+            "PicoJPEG": ["pjpeg", "pjpeg_decode_init", "pjpeg_decode_mcu", "idct", "mcu", "picojpeg"],
         }
+
+        # Non-Volatile FRAM Mapped Arrays and Memory Buffers
+        self.fram_buffers = [
+            # Standard/Legacy Benchmarks
+            "data[", "arr[", "input", "lin[", "rgnNodes", "array[", "x[", "a[", "array1[", "buffer[",
+            "memcpy", "htab[", "heap[", "malloc_beebs", "buf[", "search[", "strlen", "text", "substr",
+            "phaystack", "pneedle", "rhaystack", "rneedle", "cache[", "wikimerge", "AdjMatrix",
+            "freq[", "link[", "code[", "clen[", "heap2[", "outc[", "comp[", "cptr", "dptr",
+            "heap_ptr", "heap_end",
+            # MatMult
+            "ArrayA[", "ArrayB[", "ResultArray[", "Res[", "A[", "B[",
+            # AES-128
+            "RoundKey[", "sbox[", "Rcon[",
+            # FFT
+            "RealData[", "ImagData[", "SinTable[",
+            # SHA-256
+            "K_sha[", "data_buf[", "test_payload[",
+            # FIR Filter
+            "fir_coeffs[", "fir_input[", "fir_output[",
+            "dct_data[", "dct_result[", "dct_coeffs[",
+            # Binary Search
+            "data_array[", "search_targets[",
+            # Select
+            "arr[", "backup_arr["
+            # Count
+            "Array["
+            # Prime (Authentic BEEBS)
+            "x = ", "y = ", "result ="
+            "gCoeffBuf", "gMCUBufR", "gMCUBufG", "gMCUBufB", "HuffTable", "image_info"
+        ]
 
     def profile_line(self, line, mapping_config="HYBRID"):
         """
@@ -57,24 +98,17 @@ class MapiProParser:
         # Identify instruction type
         is_write = "=" in line and "==" not in line and "!=" not in line and "<=" not in line and ">=" not in line
 
-        # Check for data-heavy operations (Added string search, strstr, WikiSort, and Huffman arrays/buffers)
-        is_read = any(keyword in line for keyword in
-                      ["data[", "arr[", "input", "lin[", "rgnNodes", "array[", "x[", "a[", "array1[", "buffer[",
-                       "memcpy", "htab[", "heap[", "malloc_beebs", "buf[", "search[", "strlen", "text", "substr",
-                       "phaystack", "pneedle", "rhaystack", "rneedle", "cache[", "wikimerge",
-                       "freq[", "link[", "code[", "clen[", "heap2[", "outc[", "comp[", "cptr", "dptr"])
+        # Check for data-heavy buffer accesses
+        is_read = any(keyword in line for keyword in self.fram_buffers)
 
-        # Expanded logic operations to capture standard library math functions, modulo (%), and sqrt()
+        # Logic and arithmetic operations
         is_logic = any(op in line for op in
                        ["^", ">>", "<<", "&", "|", "+", "-", "*", "++", "--", "%", "pow(", "acos(", "sqrt(", "cos(",
                         "fabs("])
 
         # MAPI-PRO Hybrid Memory Mapping Logic
-        # Large arrays, hash tables, text strings, compression tables, and custom heaps are mapped to FRAM; scalars to SRAM
-        if any(buf in line for buf in
-               ["arr[", "lin[", "AdjMatrix", "rgnNodes", "array[", "x[", "a[", "array1[", "buffer[", "memcpy", "htab[",
-                "heap[", "buf[", "search[", "text", "substr", "phaystack", "pneedle", "rhaystack", "rneedle", "cache[",
-                "freq[", "link[", "code[", "clen[", "heap2[", "outc[", "comp[", "heap_ptr", "heap_end"]):
+        # Heavy arrays and static buffers map to FRAM; local scalars map to SRAM
+        if any(buf in line for buf in self.fram_buffers):
             mem_read, mem_write, mem_lat = self.ENERGY_FRAM_READ, self.ENERGY_FRAM_WRITE, self.LATENCY_FRAM
         else:
             mem_read, mem_write, mem_lat = self.ENERGY_SRAM_READ, self.ENERGY_SRAM_WRITE, self.LATENCY_SRAM
@@ -98,11 +132,17 @@ class MapiProParser:
     def get_checkpoint_cost(self, state_size_bytes=32):
         """
         The cost of saving state to Non-Volatile FRAM.
-        Increasing this value encourages the agent to be more efficient.
+        Normalized so that the baseline 32-byte cost remains anchored to original physics.
         """
-        # Saving state requires writing to FRAM
-        energy = state_size_bytes * self.ENERGY_FRAM_WRITE
-        cycles = state_size_bytes * self.LATENCY_FRAM
+        # Base calibration: 13500 nJ was calibrated for the whole 32-byte block
+        PER_BYTE_ENERGY = self.ENERGY_FRAM_WRITE / 32.0
+
+        # FRAM latency is low, assume 1 cycle per 2-byte word write
+        PER_BYTE_LATENCY = 0.5
+
+        energy = state_size_bytes * PER_BYTE_ENERGY
+        cycles = int(state_size_bytes * PER_BYTE_LATENCY)
+
         return energy, cycles
 
     def get_cyclomatic_complexity(self, code_block):

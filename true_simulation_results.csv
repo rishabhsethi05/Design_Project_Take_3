@@ -1,4 +1,4 @@
-Scenario,Benchmark,Hybrid_Cycles,PACE_Cycles,Hybrid_Efficiency_Est,PACE_Efficiency_Gain
-Summer,hash,754270,1926340,13.04%,-155.39%
-Winter,hash,961976,385954,13.04%,59.88%
-Night,hash,0,0,0.00%,0.00% (Insufficient Power)
+Scenario,Benchmark,Hybrid_Total_Cycles,PACE_Total_Cycles,Applied_Safe_V,Applied_Tax,Hybrid_Efficiency_Est,PACE_Efficiency_Gain
+Summer,insertsort,1266,369694,2.6,30.0,13.04%,-29101.74%
+Winter,insertsort,1202194,449574,2.6,30.0,13.04%,62.60%
+Night,insertsort,0,0,N/A,N/A,0.00%,0.00% (Insufficient Power)
