@@ -60,17 +60,17 @@ def evaluate_candidate(args):
 
         # SURVIVAL PENALTY: Must survive all seeds
         if cycles <= 0:
-            return (bench, scenario, safe_v, spam_tax, -999.0)
+            return (bench, scenario, safe_v, spam_tax, -999.0, 0)
 
         pace_cycles_runs.append(cycles)
 
     avg_pace_cycles = int(np.mean(pace_cycles_runs))
     MIN_VALID_CYCLES = 2000
     if avg_base_cycles < MIN_VALID_CYCLES or avg_pace_cycles < MIN_VALID_CYCLES:
-        return (bench, scenario, safe_v, spam_tax, -999.0)
+        return (bench, scenario, safe_v, spam_tax, -999.0, avg_pace_cycles)
 
     raw_gain = ((avg_base_cycles - avg_pace_cycles) / avg_base_cycles) * 100.0
-    return (bench, scenario, safe_v, spam_tax, raw_gain)
+    return (bench, scenario, safe_v, spam_tax, raw_gain, avg_pace_cycles)
 
 
 def _execute_grid(bench, scenario, avg_base_cycles, seeds, epochs, v_range, tax_range, max_workers):
@@ -81,16 +81,18 @@ def _execute_grid(bench, scenario, avg_base_cycles, seeds, epochs, v_range, tax_
 
     best_gain = -999.0
     best_params = (2.10, 0.0)
+    best_cycles = 0
 
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(evaluate_candidate, task) for task in tasks]
         for future in as_completed(futures):
-            _, _, sv, tax, gain = future.result()
+            _, _, sv, tax, gain, cycles = future.result()
             if gain > best_gain:
                 best_gain = gain
                 best_params = (sv, tax)
+                best_cycles = cycles
 
-    return best_gain, best_params[0], best_params[1]
+    return best_gain, best_params[0], best_params[1], best_cycles
 
 
 def tune_single_workload_parallel(bench, scenario, avg_base_cycles, seeds, epochs, max_workers):
@@ -99,7 +101,7 @@ def tune_single_workload_parallel(bench, scenario, avg_base_cycles, seeds, epoch
     std_v_range = [2.00, 2.05, 2.10, 2.20, 2.30]
     std_tax_range = [0.0, 0.5, 1.0, 2.5, 5.0, 7.5]
 
-    best_gain, best_sv, best_tax = _execute_grid(
+    best_gain, best_sv, best_tax, best_cycles = _execute_grid(
         bench, scenario, avg_base_cycles, seeds, epochs, std_v_range, std_tax_range, max_workers
     )
 
@@ -117,7 +119,7 @@ def tune_single_workload_parallel(bench, scenario, avg_base_cycles, seeds, epoch
         micro_tax_range = sorted(list(set([round(max(0.0, best_tax + t_off), 2) for t_off in stage2_tax_offsets])))
         micro_epochs = epochs + 40
 
-        m_gain, m_sv, m_tax = _execute_grid(
+        m_gain, m_sv, m_tax, m_cycles = _execute_grid(
             bench, scenario, avg_base_cycles, seeds, micro_epochs, micro_v_range, micro_tax_range, max_workers
         )
 
@@ -125,6 +127,7 @@ def tune_single_workload_parallel(bench, scenario, avg_base_cycles, seeds, epoch
             best_gain = m_gain
             best_sv = m_sv
             best_tax = m_tax
+            best_cycles = m_cycles
             print(f"      [*] Stage 2 rescued gain to {best_gain:>.2f}% (V={best_sv:.2f}, Tax={best_tax:.2f})")
         else:
             print(f"      [*] Stage 2 exhausted. Original parameters retained.")
@@ -142,7 +145,7 @@ def tune_single_workload_parallel(bench, scenario, avg_base_cycles, seeds, epoch
         ultra_tax_range = sorted(list(set([round(max(0.0, best_tax + t_off), 2) for t_off in stage3_tax_offsets])))
         ultra_epochs = epochs + 80
 
-        u_gain, u_sv, u_tax = _execute_grid(
+        u_gain, u_sv, u_tax, u_cycles = _execute_grid(
             bench, scenario, avg_base_cycles, seeds, ultra_epochs, ultra_v_range, ultra_tax_range, max_workers
         )
 
@@ -150,11 +153,13 @@ def tune_single_workload_parallel(bench, scenario, avg_base_cycles, seeds, epoch
             best_gain = u_gain
             best_sv = u_sv
             best_tax = u_tax
-            print(f"      [*] Stage 3 squeezed out a better gain: {best_gain:>.2f}% (V={best_sv:.2f}, Tax={best_tax:.2f})")
+            best_cycles = u_cycles
+            print(
+                f"      [*] Stage 3 squeezed out a better gain: {best_gain:>.2f}% (V={best_sv:.2f}, Tax={best_tax:.2f})")
         else:
             print(f"      [*] Stage 3 exhausted. No further improvements found.")
 
-    return best_sv, best_tax, best_gain
+    return best_sv, best_tax, best_gain, best_cycles
 
 
 def run_expert_tuner():
@@ -195,6 +200,8 @@ def run_expert_tuner():
     print(f"[*] DEEP THREE-STAGE AUTO-TUNER STARTING (CORES: {MAX_WORKERS})")
     print("=" * 70)
 
+    # Calculate and immediately print the baselines before tuning begins
+    print("\n[*] CALCULATING HYBRID BASELINE CYCLES...")
     baselines = {b: {} for b in benchmarks}
     for bench in benchmarks:
         workload = get_workload(bench, 5)
@@ -217,27 +224,33 @@ def run_expert_tuner():
             else:
                 baselines[bench][scen] = int(np.mean(hybrid_runs))
 
+        # Display the baseline cycles immediately
+        print(
+            f"  -> Baseline set for {bench:<18} | Summer: {baselines[bench]['Summer']:<10} | Winter: {baselines[bench]['Winter']:<10}")
+
+    print("\n[*] BASELINES COMPLETE. COMMENCING DEEP TUNING...")
+
     results = {bench: {} for bench in benchmarks}
 
     for bench in benchmarks:
         print(f"\n[+] Tuning Benchmark: {bench}")
         for scen in scenarios:
             avg_base_cycles = baselines[bench][scen]
-            best_sv, best_tax, best_gain = tune_single_workload_parallel(
+            best_sv, best_tax, best_gain, best_cycles = tune_single_workload_parallel(
                 bench, scen, avg_base_cycles, EVAL_SEEDS, EPOCHS, MAX_WORKERS
             )
-            results[bench][scen] = {"safe_v": best_sv, "tax": best_tax, "gain": best_gain}
+            results[bench][scen] = {"safe_v": best_sv, "tax": best_tax, "gain": best_gain, "cycles": best_cycles}
 
             gain_color = "\033[92m" if best_gain > 0 else "\033[91m"
             print(
-                f"  -> {scen:<6} Best: SafeV={best_sv:.2f}V | Tax={best_tax:>4.2f} | Final Gain: {gain_color}{best_gain:>6.2f}%\033[0m")
+                f"  -> {scen:<6} Best: SafeV={best_sv:.2f}V | Tax={best_tax:>4.2f} | Cycles: {best_cycles:<9} | Final Gain: {gain_color}{best_gain:>6.2f}%\033[0m")
 
-    print("\n" + "=" * 95)
+    print("\n" + "=" * 145)
     print(" TRUE PARETO-OPTIMAL PROFILES (THREE-STAGE VERIFIED)")
-    print("=" * 95)
+    print("=" * 145)
     print(
-        f"{'Benchmark':<18} | {'Summer (V, Tax)':<18} | {'Summer Gain':<13} | {'Winter (V, Tax)':<18} | {'Winter Gain':<13}")
-    print("-" * 95)
+        f"{'Benchmark':<18} | {'Summer (V, Tax)':<18} | {'Summer Gain':<13} | {'Sum Base':<10} | {'Sum PACE':<10} | {'Winter (V, Tax)':<18} | {'Winter Gain':<13} | {'Win Base':<10} | {'Win PACE':<10}")
+    print("-" * 145)
 
     for bench in benchmarks:
         s_res = results[bench]["Summer"]
@@ -246,8 +259,14 @@ def run_expert_tuner():
         w_param_str = f"{w_res['safe_v']:.2f}V, {w_res['tax']:.2f}"
         s_gain_str = f"{s_res['gain']:>8.2f}%"
         w_gain_str = f"{w_res['gain']:>8.2f}%"
-        print(f"{bench:<18} | {s_param_str:<18} | {s_gain_str:<13} | {w_param_str:<18} | {w_gain_str:<13}")
-    print("=" * 95)
+        s_cyc_str = f"{s_res['cycles']}"
+        w_cyc_str = f"{w_res['cycles']}"
+        s_base_str = f"{baselines[bench]['Summer']}"
+        w_base_str = f"{baselines[bench]['Winter']}"
+
+        print(
+            f"{bench:<18} | {s_param_str:<18} | {s_gain_str:<13} | {s_base_str:<10} | {s_cyc_str:<10} | {w_param_str:<18} | {w_gain_str:<13} | {w_base_str:<10} | {w_cyc_str:<10}")
+    print("=" * 145)
 
     print("\n" + "=" * 70)
     print("[*] COPY-PASTE READY WORKLOAD_PROFILES FOR main.py")
