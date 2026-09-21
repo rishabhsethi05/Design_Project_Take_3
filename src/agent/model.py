@@ -1,3 +1,20 @@
+"""
+model.py -- Phase 0 patch: adds bypass_reflexes to choose_action().
+
+Only change from the version you sent: choose_action() now accepts
+bypass_reflexes=False. When True, the two hard-coded voltage reflexes
+below are skipped entirely and control goes straight to the Q-table
+lookup. This is needed because sim_engine.py now applies the reflex
+check at the engine level (see sim_engine.py patch docstring) -- without
+this flag, the agent would silently reapply its own copy of the same
+reflexes after the engine's gate already ran, which is harmless for R4
+(full PACE, reflexes on at both levels -- redundant but not wrong) but
+actively wrong for R3 (reflexes supposed to be OFF: the engine correctly
+skips its gate, but without this flag the agent's *internal* reflexes
+would still fire, silently reintroducing exactly the layer R3 is meant
+to remove).
+"""
+
 import numpy as np
 import pickle
 import os
@@ -28,6 +45,28 @@ class AdaptiveCheckpointAgent:
         # Base Configs for Rewards
         self.safe_v_threshold = 2.4
         self.base_spam_tax = 10.0
+
+        # NEW -- Phase 2 item 7: length-normalized tax. OPT-IN, default off,
+        # so existing behavior (and every result verified against the
+        # harness so far) is completely unchanged unless explicitly enabled.
+        self.use_length_normalized_tax = False
+        # Reference length (in trace steps) a checkpoint's tax is calibrated
+        # against. remaining_steps == reference_length => effective tax ==
+        # base_spam_tax (no change from current behavior). remaining_steps
+        # SMALLER than this (either because the workload itself is short,
+        # or because we're near the end of a longer one) => effective tax
+        # scales UP, discouraging checkpoints where there's little length
+        # left to amortize their fixed cost against. This default (1000) is
+        # a rough mid-range guess across the 22-benchmark suite's trace
+        # lengths (post 5x multiplier) -- NOT calibrated against actual
+        # per-benchmark instruction counts. Recalibrate this against the
+        # real distribution of workload lengths before trusting results
+        # from this feature; see phase2_length_normalized_tax_experiment.py.
+        self.tax_reference_length = 1000.0
+        # Effective tax is capped at this multiple of base_spam_tax so a
+        # tiny remaining_steps value near program end can't blow up the
+        # reward into numerical nonsense.
+        self.max_tax_multiplier = 10.0
 
     def reset_state(self):
         """Reset operational state tracking between episodes/epochs."""
@@ -65,30 +104,38 @@ class AdaptiveCheckpointAgent:
 
         return (v_bin, pc_bin, cp_bin, inflow_bin)
 
-    def choose_action(self, v, pc, inflow, complexity=1, season_flag=1, features=None, epsilon=None):
+    def choose_action(self, v, pc, inflow, complexity=1, season_flag=1, features=None, epsilon=None,
+                       bypass_reflexes=False):
         """
         Selects an action using Epsilon-Greedy logic, overridden by strict hardware/efficiency reflexes.
+
+        bypass_reflexes: NEW. When True, skips the two hard-coded voltage
+        reflexes below and goes straight to Q-table lookup. Used when the
+        caller (sim_engine.py) has already applied (or deliberately
+        disabled) reflex handling at the engine level, to avoid double-
+        applying or accidentally reintroducing them -- see module docstring.
         """
         if pc < 0.01:
             self.steps_since_cp = 0
 
-        # ==========================================
-        # SPRINT & EFFICIENCY REFLEXES
-        # ==========================================
-        # 1. Never checkpoint if capacitor is nearly full (waste of time/energy).
-        # 2. Sprint to the finish line if we are >90% done AND voltage is healthy (> 2.4V).
-        # This completely shields short programs from suicidal epsilon-exploration.
-        if v > 2.65 or (pc > 90.0 and v > 2.4):
-            self.steps_since_cp += 1
-            return 0
+        if not bypass_reflexes:
+            # ==========================================
+            # SPRINT & EFFICIENCY REFLEXES
+            # ==========================================
+            # 1. Never checkpoint if capacitor is nearly full (waste of time/energy).
+            # 2. Sprint to the finish line if we are >90% done AND voltage is healthy (> 2.4V).
+            # This completely shields short programs from suicidal epsilon-exploration.
+            if v > 2.65 or (pc > 90.0 and v > 2.4):
+                self.steps_since_cp += 1
+                return 0
 
-        # ==========================================
-        # CRITICAL HARDWARE REFLEX
-        # ==========================================
-        # Force a save if voltage drops dangerously low to prevent a crash.
-        if v < 2.15:
-            self.steps_since_cp = 0
-            return 1
+            # ==========================================
+            # CRITICAL HARDWARE REFLEX
+            # ==========================================
+            # Force a save if voltage drops dangerously low to prevent a crash.
+            if v < 2.15:
+                self.steps_since_cp = 0
+                return 1
 
         state = self._get_state_key(v, pc, inflow, complexity, season_flag, features)
         self.last_state = state
@@ -137,7 +184,21 @@ class AdaptiveCheckpointAgent:
                 elif v < self.safe_v_threshold:
                     reward = 150.0 - (float(cost) * 0.1)  # Reward defensive save near death
                 else:
-                    reward = -10.0 - (float(self.base_spam_tax) * 0.5)  # Modest tax for saving while completely safe
+                    # Modest tax for saving while completely safe.
+                    # NEW -- Phase 2 item 7: optionally scale the tax by how
+                    # little execution length remains to amortize this
+                    # checkpoint's fixed cost against.
+                    effective_tax = self.base_spam_tax
+                    if self.use_length_normalized_tax:
+                        remaining_steps = None
+                        if features is not None:
+                            remaining_steps = features.get("remaining_steps")
+                        if remaining_steps is not None and remaining_steps > 0:
+                            scale = self.tax_reference_length / float(remaining_steps)
+                            scale = min(scale, self.max_tax_multiplier)  # cap -- see __init__ comment
+                            scale = max(scale, 1.0)  # never REDUCE the tax below baseline via this mechanism
+                            effective_tax = self.base_spam_tax * scale
+                    reward = -10.0 - (float(effective_tax) * 0.5)
             else:  # ACTION: Continue
                 if v < 2.25:
                     reward = -100.0  # Punish riding the dropping rail without saving

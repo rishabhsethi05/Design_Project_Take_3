@@ -10,15 +10,15 @@ class MapiProParser:
 
     def __init__(self):
         # Energy Constants (nJ) - MSP430FR6989 Specs
-        self.ENERGY_SRAM_READ = 5200.0
-        self.ENERGY_SRAM_WRITE = 5400.0
-        self.ENERGY_FRAM_READ = 10500.0
-        self.ENERGY_FRAM_WRITE = 13500.0
+        self.ENERGY_SRAM_READ = 5500.0
+        self.ENERGY_SRAM_WRITE = 5600.0
+        self.ENERGY_FRAM_READ = 10325.0
+        self.ENERGY_FRAM_WRITE = 13125.0
         self.ENERGY_LOGIC_OP = 2500.0
 
         # Latency (Clock Cycles @ 16MHz)
         self.LATENCY_SRAM = 1
-        self.LATENCY_FRAM = 3
+        self.LATENCY_FRAM = 2
         self.LATENCY_LOGIC = 1
 
         self.predicted_algo = "Unknown"

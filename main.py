@@ -1,3 +1,33 @@
+"""
+main.py -- per-benchmark figure/CSV generation for the PACE paper.
+
+CHANGES MADE IN THIS PASS (read before running):
+1. WORKLOAD_PROFILES replaced with the actual final, post-harvester-fix
+   tuned parameters (matching the last verified tuner.py run / Table IV
+   in main.tex exactly). The previous dict here was stale -- e.g. aes.c
+   had tax=0.00/0.00 here vs the real tuned 0.50/1.00 -- and would have
+   produced figures inconsistent with the paper's own tables.
+2. fft.c, matmult.c, picojpeg.c removed from WORKLOAD_PROFILES. These are
+   excluded from the paper's evaluation (checkpoint state size vs.
+   capacitor energy budget -- see Section IV-A of main.tex). Do not add
+   them back without also updating the paper.
+3. multiplier=5 kept as-is -- confirmed to match tuner.py's own
+   get_workload(bench, 5), so this is now a documented, intentional part
+   of the methodology (main.tex Section IV-A has been updated to state
+   this explicitly), not an inconsistency.
+4. The Night scenario previously short-circuited to a hardcoded, fake
+   "0.00% (Insufficient Power)" result WITHOUT running any simulation.
+   main.tex claims Night is used to verify graceful failure under zero
+   harvesting -- that claim was not actually true of this code. Night now
+   runs through the same pipeline as Summer/Winter. This is safe: the
+   recharge loop in sim_engine.py already caps at 10,000 attempts before
+   breaking out, so a zero-inflow run terminates rather than hanging.
+5. Removed the "(BALANCED PARETO-OPTIMAL PROFILES (TUNED))" comment label
+   -- main.tex no longer uses "Pareto-optimal" terminology (the tuning
+   pipeline is a scalar best-mean-gain grid search, not multi-objective
+   Pareto optimization), so this script shouldn't either.
+"""
+
 import os
 import random
 import numpy as np
@@ -33,34 +63,33 @@ def get_fresh_workload(benchmark_file, scenario, multiplier=5):
 
 
 # ============================================================
-# BALANCED PARETO-OPTIMAL PROFILES (TUNED)
+# TUNED SAFETY-THRESHOLD AND PENALTY CONFIGURATIONS
+# (post-harvester-fix, matches main.tex Table IV; 22 benchmarks --
+#  fft.c/matmult.c/picojpeg.c intentionally excluded, see docstring)
 # ============================================================
 WORKLOAD_PROFILES = {
-    "aes.c": {"Summer": {"safe_v": 2.00, "tax": 0.00}, "Winter": {"safe_v": 2.00, "tax": 0.00}},
-    "bs.c": {"Summer": {"safe_v": 1.90, "tax": 0.50}, "Winter": {"safe_v": 2.00, "tax": 0.00}},
-    "cnt.c": {"Summer": {"safe_v": 1.90, "tax": 0.00}, "Winter": {"safe_v": 2.00, "tax": 5.00}},
-    "crc.c": {"Summer": {"safe_v": 2.00, "tax": 1.00}, "Winter": {"safe_v": 2.00, "tax": 0.00}},
-    "dct.c": {"Summer": {"safe_v": 2.00, "tax": 0.00}, "Winter": {"safe_v": 1.90, "tax": 1.00}},
-    "dijkstra.c": {"Summer": {"safe_v": 2.00, "tax": 0.00}, "Winter": {"safe_v": 2.00, "tax": 0.00}},
-    "fft.c": {"Summer": {"safe_v": 2.00, "tax": 0.50}, "Winter": {"safe_v": 2.05, "tax": 0.50}},
-    "fir.c": {"Summer": {"safe_v": 2.00, "tax": 1.00}, "Winter": {"safe_v": 2.00, "tax": 0.00}},
-    "huffman.c": {"Summer": {"safe_v": 1.96, "tax": 0.05}, "Winter": {"safe_v": 2.00, "tax": 0.00}},
-    "matmult.c": {"Summer": {"safe_v": 2.00, "tax": 0.00}, "Winter": {"safe_v": 2.00, "tax": 2.50}},
-    "mergesort.c": {"Summer": {"safe_v": 2.00, "tax": 0.00}, "Winter": {"safe_v": 2.00, "tax": 5.00}},
-    "prime.c": {"Summer": {"safe_v": 2.00, "tax": 1.00}, "Winter": {"safe_v": 1.90, "tax": 1.00}},
-    "quicksort.c": {"Summer": {"safe_v": 2.00, "tax": 0.50}, "Winter": {"safe_v": 2.00, "tax": 0.00}},
-    "select.c": {"Summer": {"safe_v": 1.90, "tax": 0.00}, "Winter": {"safe_v": 1.90, "tax": 0.00}},
-    "sha256.c": {"Summer": {"safe_v": 2.00, "tax": 0.50}, "Winter": {"safe_v": 2.00, "tax": 0.00}},
-    "strstr.c": {"Summer": {"safe_v": 1.90, "tax": 0.25}, "Winter": {"safe_v": 2.00, "tax": 0.00}},
-    "wikisort.c": {"Summer": {"safe_v": 1.90, "tax": 0.00}, "Winter": {"safe_v": 2.00, "tax": 5.00}},
-    "bubblesort.c": {"Summer": {"safe_v": 2.00, "tax": 0.00}, "Winter": {"safe_v": 2.00, "tax": 0.50}},
-    "cubic.c": {"Summer": {"safe_v": 2.00, "tax": 0.50}, "Winter": {"safe_v": 1.90, "tax": 1.50}},
-    "fibcall.c": {"Summer": {"safe_v": 2.00, "tax": 0.00}, "Winter": {"safe_v": 1.90, "tax": 0.50}},
-    "hash.c": {"Summer": {"safe_v": 1.90, "tax": 0.00}, "Winter": {"safe_v": 1.90, "tax": 1.00}},
-    "insertsort.c": {"Summer": {"safe_v": 1.90, "tax": 4.00}, "Winter": {"safe_v": 1.90, "tax": 0.25}},
-    "recursion.c": {"Summer": {"safe_v": 2.00, "tax": 0.50}, "Winter": {"safe_v": 2.00, "tax": 0.50}},
-    "stringsearch1.c": {"Summer": {"safe_v": 2.00, "tax": 0.50}, "Winter": {"safe_v": 2.00, "tax": 0.00}},
-    "picojpeg.c": {"Summer": {"safe_v": 1.90, "tax": 0.50}, "Winter": {"safe_v": 2.00, "tax": 0.00}},
+    "aes.c":           {"Summer": {"safe_v": 2.00, "tax": 0.50}, "Winter": {"safe_v": 2.00, "tax": 1.00}},
+    "bs.c":            {"Summer": {"safe_v": 1.95, "tax": 0.50}, "Winter": {"safe_v": 2.00, "tax": 0.00}},
+    "cnt.c":           {"Summer": {"safe_v": 2.00, "tax": 0.00}, "Winter": {"safe_v": 2.00, "tax": 0.50}},
+    "crc.c":           {"Summer": {"safe_v": 2.00, "tax": 1.00}, "Winter": {"safe_v": 1.90, "tax": 0.25}},
+    "dct.c":           {"Summer": {"safe_v": 1.96, "tax": 0.05}, "Winter": {"safe_v": 1.90, "tax": 0.50}},
+    "dijkstra.c":      {"Summer": {"safe_v": 2.00, "tax": 7.50}, "Winter": {"safe_v": 2.00, "tax": 0.00}},
+    "fir.c":           {"Summer": {"safe_v": 2.00, "tax": 7.50}, "Winter": {"safe_v": 2.00, "tax": 0.00}},
+    "huffman.c":       {"Summer": {"safe_v": 2.00, "tax": 0.50}, "Winter": {"safe_v": 2.00, "tax": 0.00}},
+    "mergesort.c":     {"Summer": {"safe_v": 2.00, "tax": 0.50}, "Winter": {"safe_v": 2.00, "tax": 0.00}},
+    "prime.c":         {"Summer": {"safe_v": 2.00, "tax": 1.00}, "Winter": {"safe_v": 2.00, "tax": 0.50}},
+    "quicksort.c":     {"Summer": {"safe_v": 2.00, "tax": 0.50}, "Winter": {"safe_v": 2.00, "tax": 0.50}},
+    "select.c":        {"Summer": {"safe_v": 1.90, "tax": 4.75}, "Winter": {"safe_v": 1.90, "tax": 0.00}},
+    "sha256.c":        {"Summer": {"safe_v": 2.00, "tax": 7.50}, "Winter": {"safe_v": 2.00, "tax": 0.00}},
+    "strstr.c":        {"Summer": {"safe_v": 1.90, "tax": 0.25}, "Winter": {"safe_v": 2.00, "tax": 0.00}},
+    "wikisort.c":      {"Summer": {"safe_v": 1.90, "tax": 0.50}, "Winter": {"safe_v": 1.95, "tax": 0.75}},
+    "bubblesort.c":    {"Summer": {"safe_v": 2.00, "tax": 1.00}, "Winter": {"safe_v": 1.90, "tax": 0.50}},
+    "cubic.c":         {"Summer": {"safe_v": 2.00, "tax": 0.00}, "Winter": {"safe_v": 1.90, "tax": 0.25}},
+    "fibcall.c":       {"Summer": {"safe_v": 1.90, "tax": 0.25}, "Winter": {"safe_v": 2.00, "tax": 0.00}},
+    "hash.c":          {"Summer": {"safe_v": 1.90, "tax": 0.25}, "Winter": {"safe_v": 2.00, "tax": 0.50}},
+    "insertsort.c":    {"Summer": {"safe_v": 1.90, "tax": 0.00}, "Winter": {"safe_v": 2.00, "tax": 2.50}},
+    "recursion.c":     {"Summer": {"safe_v": 2.00, "tax": 0.50}, "Winter": {"safe_v": 1.90, "tax": 0.00}},
+    "stringsearch1.c": {"Summer": {"safe_v": 2.00, "tax": 0.00}, "Winter": {"safe_v": 2.00, "tax": 0.00}},
 }
 
 
@@ -84,14 +113,10 @@ def run_experiment(scenario_name="Winter", epochs=15, benchmark_file="quicksort.
     temp_engine.parser.load_c_file(benchmark_path)
     predicted_algo = temp_engine.parser.predicted_algo
 
-    if scenario_name == "Night":
-        return {
-            "scenario": scenario_name, "hybrid": 0, "pace": 0,
-            "gain_str": "0.00% (Insufficient Power)", "gain_numeric": 0.0,
-            "algorithm": predicted_algo,
-            "safe_v": "N/A", "tax": "N/A"
-        }
-
+    # NOTE: Night is no longer short-circuited to a fake result -- it now
+    # runs through the exact same pipeline as Summer/Winter below, so it
+    # actually exercises (and can verify) graceful degradation under zero
+    # harvesting, matching what main.tex claims about this scenario.
     bench_profile = WORKLOAD_PROFILES.get(benchmark_file, {})
     profile = bench_profile.get(scenario_name, {"safe_v": 2.00, "tax": 0.5})
 
@@ -157,6 +182,25 @@ def run_experiment(scenario_name="Winter", epochs=15, benchmark_file="quicksort.
     hybrid_crashed = avg_hybrid_cycles < MIN_VALID_CYCLES
     pace_crashed = avg_pace_cycles < MIN_VALID_CYCLES
 
+    if scenario_name == "Night":
+        # Both should crash under zero inflow -- this is the graceful-failure
+        # check main.tex describes. Report it plainly rather than faking a gain.
+        if hybrid_crashed and pace_crashed:
+            gain_str = "Both failed gracefully (0 inflow, as expected)"
+        elif hybrid_crashed and not pace_crashed:
+            gain_str = "UNEXPECTED: PACE survived zero inflow, hybrid did not"
+        elif pace_crashed and not hybrid_crashed:
+            gain_str = "UNEXPECTED: Hybrid survived zero inflow, PACE did not"
+        else:
+            gain_str = "UNEXPECTED: both policies completed under zero inflow"
+        gain_val = 0.0
+        print(f"[Night check] Hybrid: {avg_hybrid_cycles:,} | PACE: {avg_pace_cycles:,} | {gain_str}")
+        return {
+            "scenario": scenario_name, "hybrid": avg_hybrid_cycles, "pace": avg_pace_cycles,
+            "gain_str": gain_str, "gain_numeric": gain_val, "algorithm": predicted_algo,
+            "safe_v": profile["safe_v"], "tax": profile["tax"]
+        }
+
     if hybrid_crashed and not pace_crashed:
         gain_str = "Baseline Failed (PACE Won)"
         gain_val = 100.0
@@ -192,6 +236,8 @@ def run_experiment(scenario_name="Winter", epochs=15, benchmark_file="quicksort.
 # VISUALIZATION & EXPORT
 # ============================================================
 def generate_bar_chart(results, algorithm_name):
+    # Night excluded from this chart -- it isn't a cycle-count comparison,
+    # see the Night-specific handling in run_experiment above.
     valid_results = [r for r in results if r['scenario'] != 'Night']
     if not valid_results:
         return
@@ -232,7 +278,7 @@ def generate_bar_chart(results, algorithm_name):
 
 
 if __name__ == "__main__":
-    WORKLOAD_MULTIPLIER = 5
+    WORKLOAD_MULTIPLIER = 5  # Confirmed to match tuner.py -- see module docstring point 3.
     EVAL_SEEDS = [42, 123, 999]  # Synced to tuner.py
     EPOCHS = 15  # Reverted back to tuner.py default to fix decay mismatch
     scenarios = ["Summer", "Winter", "Night"]
@@ -285,6 +331,8 @@ if __name__ == "__main__":
 
     for bench_name, res in all_global_results:
         clean_bench_name = bench_name.replace(".c", "")
+        if res["scenario"] == "Night":
+            continue  # Night isn't a cycle-comparison row -- see CSV above for its result instead.
         if clean_bench_name not in spreadsheet_dict:
             spreadsheet_dict[clean_bench_name] = {
                 "Benchmarks": clean_bench_name,
@@ -320,7 +368,7 @@ if __name__ == "__main__":
         safe_v_str = f"{res['safe_v']:.2f}V" if isinstance(res['safe_v'], (int, float)) else str(res['safe_v'])
         tax_str = f"{res['tax']:.1f}" if isinstance(res['tax'], (int, float)) else str(res['tax'])
 
-        padded_gain_str = f"{res['gain_str']:<28}"
+        padded_gain_str = f"{res['gain_str']:<40}"
 
         if res['gain_numeric'] > 0:
             colored_gain = f"{COLOR_GREEN}{padded_gain_str}{COLOR_RESET}"
